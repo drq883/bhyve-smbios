@@ -6,7 +6,7 @@ top:
 	@echo "patch   - patch and build bhyve"
 	@echo "revert  - revert patched source to original"
 	@echo "create  - create a bhyve.patch-TEST file from"
-	@echo "          current patches"
+	@echo "          current changes"
 	@echo "build   - rebuild bhyve from current sources"
 	@echo "install - install bhyve from current sources"
 

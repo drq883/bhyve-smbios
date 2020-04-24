@@ -10,11 +10,11 @@ The Makefile has 5 targets:
 
 - patch   - patch and build bhyve (vmrun.sh is also patched)
 - revert  - revert patched source to original
-- create  - create a bhyve.patch-TEST file from current patches
+- create  - create a bhyve.patch-TEST file from current changes
 - build   - rebuild bhyve from current sources
 - install - install bhyve from current sources
 
-# To create a new patch file after more modificaions
+# To create a new patch file after more modifications
 
 - cd /root/bhyve-patch
 - ./create-bhyve-patch
