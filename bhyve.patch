@@ -1,0 +1,765 @@
+--- usr.sbin/bhyve/Makefile.orig	2020-04-10 15:20:38.047504000 -0400
++++ usr.sbin/bhyve/Makefile	2020-04-16 09:03:24.409533000 -0400
+@@ -9,7 +9,7 @@
+ PROG=	bhyve
+ PACKAGE=	bhyve
+ 
+-MAN=	bhyve.8
++MAN=	bhyve.8 smbios.conf.8
+ 
+ BHYVE_SYSDIR?=${SRCTOP}
+ 
+@@ -20,6 +20,7 @@
+ 	bhyverun.c		\
+ 	block_if.c		\
+ 	bootrom.c		\
++	config.c		\
+ 	console.c		\
+ 	consport.c		\
+ 	ctl_util.c		\
+@@ -71,7 +72,7 @@
+ .PATH:  ${BHYVE_SYSDIR}/sys/amd64/vmm
+ SRCS+=	vmm_instruction_emul.c
+ 
+-LIBADD=	vmmapi md pthread z util sbuf cam
++LIBADD=	vmmapi md pthread z util sbuf cam ucl
+ 
+ .if ${MK_INET_SUPPORT} != "no"
+ CFLAGS+=-DINET
+@@ -88,6 +89,7 @@
+ CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
+ CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
+ CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
++CFLAGS+= -I${SRCTOP}/contrib/libucl/include
+ 
+ .ifdef GDB_LOG
+ CFLAGS+=-DGDB_LOG
+--- usr.sbin/bhyve/bhyve.8.orig	2020-04-10 15:20:38.175999000 -0400
++++ usr.sbin/bhyve/bhyve.8	2020-04-16 09:07:17.823058000 -0400
+@@ -33,6 +33,8 @@
+ .Sh SYNOPSIS
+ .Nm
+ .Op Fl abehuwxACHPSWY
++.br
++.Op Fl B Ar CONFIG
+ .Oo
+ .Fl c\~ Ns
+ .Oo
+@@ -87,6 +89,12 @@
+ kernels compiled with
+ .Cd "device bvmconsole" .
+ This option will be deprecated in a future version.
++.It Fl B
++Load a
++.Cd "libucl"
++configuration file, CONFIG, used to modify the attributes in
++smbios tables type 0, 1, 2, 3 and 11 for this execution.
++See smbios.conf(8) for syntax of this file.
+ .It Fl c Op Ar setting ...
+ Number of guest virtual CPUs
+ and/or the CPU topology.
+@@ -623,6 +631,7 @@
+ .Xr ethers 5 ,
+ .Xr bhyvectl 8 ,
+ .Xr bhyveload 8
++.Xr smbios.conf 8
+ .Pp
+ .Rs
+ .%A Intel
+--- usr.sbin/bhyve/bhyverun.c.orig	2020-04-10 15:20:38.039671000 -0400
++++ usr.sbin/bhyve/bhyverun.c	2020-04-16 09:03:24.432698000 -0400
+@@ -69,6 +69,7 @@
+ #include "bhyverun.h"
+ #include "acpi.h"
+ #include "atkbdc.h"
++#include "config.h"
+ #include "inout.h"
+ #include "dbgport.h"
+ #include "fwctl.h"
+@@ -211,12 +212,13 @@
+ {
+ 
+         fprintf(stderr,
+-		"Usage: %s [-abehuwxACHPSWY]\n"
++		"Usage: %s [-abehuwxABCHPSWY]\n"
+ 		"       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
+ 		"       %*s [-g <gdb port>] [-l <lpc>]\n"
+ 		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] <vm>\n"
+ 		"       -a: local apic is in xAPIC mode (deprecated)\n"
+ 		"       -A: create ACPI tables\n"
++		"       -B: load libucl smbios configuration file\n"
+ 		"       -c: number of cpus and/or topology specification\n"
+ 		"       -C: include guest memory in core file\n"
+ 		"       -e: exit on unhandled I/O access\n"
+@@ -999,7 +1001,7 @@
+ 	rtc_localtime = 1;
+ 	memflags = 0;
+ 
+-	optstr = "abehuwxACHIPSWYp:g:G:c:s:m:l:U:";
++	optstr = "abehuwxACHIPSWYp:B:g:G:c:s:m:l:U:";
+ 	while ((c = getopt(argc, argv, optstr)) != -1) {
+ 		switch (c) {
+ 		case 'a':
+@@ -1010,6 +1012,9 @@
+ 			break;
+ 		case 'b':
+ 			bvmcons = 1;
++			break;
++		case 'B':
++			load_smbios_config(optarg);
+ 			break;
+ 		case 'p':
+                         if (pincpu_parse(optarg) != 0) {
+--- usr.sbin/bhyve/config.h.orig	2020-04-16 09:03:24.432829000 -0400
++++ usr.sbin/bhyve/config.h	2020-04-16 09:03:24.433166000 -0400
+@@ -0,0 +1,39 @@
++/*-
++ * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
++ * Copyright (c) 2015-2018 Marcelo Araujo <araujo@FreeBSD.org>
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ *
++ */
++
++#include <ucl.h>
++
++extern char const *smbios_type0_strings[];
++extern char const *smbios_type1_strings[];
++extern char const *smbios_type2_strings[];
++extern char const *smbios_type3_strings[];
++extern char **smbios_type11_strings;
++
++int check_config_file(const char *smbios_file);
++void load_smbios_config(const char *smbios_file);
++int parse_smbios_config(struct ucl_parser *p);
+--- usr.sbin/bhyve/config.c.orig	2020-04-16 09:03:24.433272000 -0400
++++ usr.sbin/bhyve/config.c	2020-04-16 09:03:24.434563000 -0400
+@@ -0,0 +1,285 @@
++/*-
++ * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
++ * Copyright (c) 2015-2018 Marcelo Araujo <araujo@FreeBSD.org>
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ *
++ */
++
++#include <sys/cdefs.h>
++__FBSDID("$FreeBSD$");
++
++#include <sys/types.h>
++
++#include <err.h>
++#include <errno.h>
++#include <sysexits.h>
++#include <string.h>
++#include <stdio.h>
++
++#include "config.h"
++
++/*
++ * Check if the config file exists.
++ */
++int
++check_config_file(const char *smbios_file)
++{
++	FILE *file;
++	if ((file = fopen(smbios_file, "r"))) {
++		fclose(file);
++		return (0);
++	}
++	
++	errx(EX_NOINPUT, "Config file %s not found", smbios_file);
++}
++
++/*
++ * Load smbios config file.
++ */
++void
++load_smbios_config(const char *smbios_file)
++{
++	check_config_file(smbios_file);
++
++	struct ucl_parser *parser = NULL;
++	parser = ucl_parser_new(UCL_PARSER_KEY_LOWERCASE |
++			    UCL_PARSER_NO_IMPLICIT_ARRAYS);
++	if (parser == NULL)
++		errx(1, "Could not allocate ucl parser");
++
++	if (smbios_file != NULL) {
++		if (!ucl_parser_add_file_priority(parser, smbios_file, 5)) {
++			if (errno != ENOENT)
++				errx(EXIT_FAILURE, "Parse error in file %s: %s",
++				    smbios_file, ucl_parser_get_error(parser));
++			ucl_parser_free(parser);
++		}
++	}
++
++	parse_smbios_config(parser);
++}
++
++/*
++ * Parse type0, 1, 2, 3 keys and values from the config file.
++ * Match keys to any (colon-separated) list of keys we are given
++ * here and if found, store the value in the correct location in
++ * strings. The order of the keys we are called with should match
++ * the index of the key in the correspoding type structure.
++ */
++void
++parse_smbios_keys(const ucl_object_t *obj, char *keys, char **output) {
++	char **strings;
++	int index = 0;
++	char *ourcopy, *ptr, *tmp;
++	int  string_len = strlen(keys);
++	int length;
++
++	ourcopy = ptr = malloc(string_len+1);
++	strcpy(ourcopy, keys);
++
++	/*
++  	 * count up string elements we have
++ 	 * if we got this far, we have at least one
++ 	 */
++	int number_string_elements = 1;
++	while ((tmp = strchr(ptr, ':'))) {
++		number_string_elements++;
++		ptr = ++tmp;
++	}
++	length = sizeof(char *) * ++number_string_elements;
++	strings = malloc(length);
++	bzero(strings, length);
++
++	/* now fill in strings elements with pointers */
++	ptr = ourcopy;
++	while ((tmp = strchr(ptr, ':'))) {
++		*tmp = 0;
++		strings[index++] = ptr;
++		strings[index] = ptr = ++tmp;
++	}
++	/* save last, or only one */
++	strings[index] = ptr;
++
++	/*
++	 * look thru each key in the config file for this type
++         * if we find a match, save it in the appropriate
++         * place in strings
++	 */
++	ucl_object_iter_t it_ele = ucl_object_iterate_new(obj);
++	const ucl_object_t *ele;
++	while ((ele = ucl_object_iterate_safe(it_ele, true))) {
++		const char *elekey = ucl_object_key(ele);
++
++		/* compare elekey against all saved strings */
++		for (index=0; strings[index]; index++) {
++			if (! strcasecmp(elekey, strings[index])) {
++				output[index] = (char *)ucl_object_tostring_forced(ele);
++				break;
++			}
++		}
++	}
++
++	/* free our element and release our memory */
++	ucl_object_iterate_free(it_ele);
++	free(strings);
++}
++
++/*
++ * Parse type11 strings and store in a char ** array.
++ *   
++ * Returns: pointer to a char ** array of strings
++ *   
++ */
++char **
++parse_smbios_type11_strings(const ucl_object_t *obj) {
++	char **strings, *p;
++	long index = 0;
++	int  string_storage_size = 512;
++	char *string_storage = malloc(string_storage_size);
++	char *string_storage_next = string_storage;
++	long string_count = 0;
++	const ucl_object_t *ele;
++	ucl_object_iter_t it_ele = ucl_object_iterate_new(obj);
++
++	/*
++	 * type 11 is just a series of strings in an array
++	 * so loop over elements of obj and save value
++	 *
++	 * string_storage starts at 512 bytes and is doubled
++	 * in size each time we are about to run out.
++	 *
++	 */
++	while ((ele = ucl_object_iterate_safe(it_ele, true))) {
++		if (ele->type == UCL_ARRAY) {
++			const ucl_object_t *str;
++			ucl_object_iter_t it_str = ucl_object_iterate_new(ele);
++
++			while ((str = ucl_object_iterate_safe(it_str, true))) {
++				const char *sv = str->value.sv;
++				int strsize = strlen(sv);
++				/* see if we have enough room for this new string, if not realloc */
++				while ((string_storage_size - (string_storage_next - string_storage))
++				  < (strsize + 1)) {
++					int offset = (string_storage_next - string_storage);
++					string_storage_size *= 2; // double the size each time */
++					string_storage = realloc(string_storage, string_storage_size);
++					string_storage_next = string_storage + offset;
++				}
++				string_count++;
++				strcpy(string_storage_next, sv);
++				string_storage_next += strsize;
++				*string_storage_next++ = 0;
++			}
++		}
++		else {
++			const char *elekey = ucl_object_key(ele);
++			fprintf(stderr, "smbios config file type11 element, %s, is not an array, ignored\n",
++			  elekey);
++		}
++	}
++
++	/* free our element */
++	ucl_object_iterate_free(it_ele);
++
++	/* 
++	 * loop thru string_storage and create char ** array
++	 * including trailing NULL pointer;
++	 */
++	p = string_storage;
++	strings = malloc(sizeof(char *) * (string_count + 1));
++
++	strings[string_count] = NULL;
++	index = 0;
++	while (string_count--) {
++		strings[index++] = p;
++		p += strlen(p) + 1;
++	}
++	return(strings);
++}
++
++/*
++ * Parse the smbios configuration file.
++ * We will parse values for types 0, 1, 2, 3, 11
++ */
++int
++parse_smbios_config(struct ucl_parser *p)
++{
++	const ucl_object_t *obj = NULL;
++	ucl_object_iter_t it = NULL;
++	const ucl_object_t *cur;
++	const char *key;
++	      char *val;
++	long smbios_type = 0;
++
++	obj = ucl_parser_get_object(p);
++	ucl_parser_free(p);
++
++	if (obj == NULL || ucl_object_type(obj) != UCL_OBJECT)
++		errx(EXIT_FAILURE, "Invalid configuration format.\n");
++	it = ucl_object_iterate_new(obj);
++	/* iterate over keys */
++	while ((cur = ucl_object_iterate_safe(it, true)) != NULL) {
++		key = ucl_object_key(cur);
++		if (! strncasecmp(key, "type", 4) && key[4]) {
++			smbios_type = strtol(key+4, NULL, 10);
++			switch(smbios_type) {
++				case 0:
++					parse_smbios_keys(cur,
++					  "vendor:version:biosdate",
++					  (char **)smbios_type0_strings);
++					break;
++				case 1:
++					parse_smbios_keys(cur,
++					  "manufacturer:product:version:serial:sku:family",
++					  (char **)smbios_type1_strings);
++					break;
++				case 2:
++					parse_smbios_keys(cur,
++					  "manufacturer:product:version:serial:asset",
++					  (char **)smbios_type2_strings);
++					break;
++				case 3:
++					parse_smbios_keys(cur,
++					  "manufacturer:version:serial:asset:sku",
++					  (char **)smbios_type3_strings);
++					break;
++				case 11:
++					/*
++					 * for type11, parse_smbios_type_strings() will create
++					 * smbios_type11_strings for us since we don't know how big it
++					 * will be. It's not a fixed size like many of the other types
++					 */
++					smbios_type11_strings = parse_smbios_type11_strings(cur);
++					break;
++				default :
++					fprintf(stderr, "smbios config file contains type, %ld. ignored\n",
++					  smbios_type);
++			}
++		}
++		val = (char *)ucl_object_tostring_forced(cur);
++	}
++	ucl_object_iterate_free(it);
++
++	return (0);
++}
+--- usr.sbin/bhyve/smbiostbl.c.orig	2020-04-10 15:20:38.173641000 -0400
++++ usr.sbin/bhyve/smbiostbl.c	2020-04-16 09:03:24.442289000 -0400
+@@ -56,8 +56,10 @@
+ 
+ #define	SMBIOS_TYPE_BIOS	0
+ #define	SMBIOS_TYPE_SYSTEM	1
++#define	SMBIOS_TYPE_BOARD	2
+ #define	SMBIOS_TYPE_CHASSIS	3
+ #define	SMBIOS_TYPE_PROCESSOR	4
++#define	SMBIOS_TYPE_OEM		11
+ #define	SMBIOS_TYPE_MEMARRAY	16
+ #define	SMBIOS_TYPE_MEMDEVICE	17
+ #define	SMBIOS_TYPE_MEMARRAYMAP	19
+@@ -153,6 +155,19 @@
+ } __packed;
+ 
+ /*
++ * Baseboard Information
++ */
++struct smbios_table_type2 {
++	struct smbios_structure	header;
++	uint8_t			manufacturer;	/* manufacturer string */
++	uint8_t			product;	/* product name string */
++	uint8_t			version;	/* version string */
++	uint8_t			serial;		/* serial number string */
++	uint8_t			asset; 		/* asset tag */
++	uint8_t			flags; 		/* feature flags */
++} __packed;
++
++/*
+  * System Enclosure or Chassis
+  */
+ #define	SMBIOS_CHT_UNKNOWN	0x02	/* unknown */
+@@ -172,6 +187,7 @@
+ 	uint8_t			psstate;	/* power supply state */
+ 	uint8_t			tstate;		/* thermal state */
+ 	uint8_t			security;	/* security status */
++	uint32_t		oeminfo;	/* oem info */
+ 	uint8_t			uheight;	/* height in 'u's */
+ 	uint8_t			cords;		/* number of power cords */
+ 	uint8_t			elems;		/* number of element records */
+@@ -220,6 +236,12 @@
+ 	uint16_t		family2;	/* processor family 2 */
+ } __packed;
+ 
++/* just a list of strings of key and value pairs */
++struct smbios_table_type11 {
++	struct smbios_structure	header;
++	uint8_t			nstrings;
++} __packed;
++
+ /*
+  * Physical Memory Array
+  */
+@@ -355,6 +377,25 @@
+ 	NULL
+ };
+ 
++struct smbios_table_type2 smbios_type2_template = {
++	{ SMBIOS_TYPE_BOARD, sizeof (struct smbios_table_type2), 0 },
++	1,		/* manufacturer string */
++	2,		/* product string */
++	3,		/* version string */
++	4,		/* serial number string */
++	5,		/* asset tag */
++	0 		/* feature flags */
++};
++
++const char *smbios_type2_strings[] = {
++	" ",		/* manufacturer string */
++	"BHYVE",	/* product name string */
++	"1.0",		/* version string */
++	"None",		/* serial number string */
++	"None",		/* asset tag string */
++	NULL
++};
++
+ struct smbios_table_type3 smbios_type3_template = {
+ 	{ SMBIOS_TYPE_CHASSIS, sizeof (struct smbios_table_type3), 0 },
+ 	1,		/* manufacturer string */
+@@ -370,6 +411,7 @@
+ 	0,		/* number of power cords (0=number unspecified) */
+ 	0,		/* number of contained element records */
+ 	0,		/* length of records */
++	0,
+ 	5		/* sku number string */
+ };
+ 
+@@ -423,6 +465,17 @@
+     const char **template_strings, char *curaddr, char **endaddr,
+     uint16_t *n, uint16_t *size);
+ 
++char **smbios_type11_strings = NULL;
++
++struct smbios_table_type11 smbios_type11_template = {
++	{ SMBIOS_TYPE_OEM, sizeof (struct smbios_table_type11),  0 },
++	0               /* first string */
++};
++
++static int smbios_type11_initializer(struct smbios_structure *template_entry,
++    const char **template_strings, char *curaddr, char **endaddr,
++    uint16_t *n, uint16_t *size);
++
+ struct smbios_table_type16 smbios_type16_template = {
+ 	{ SMBIOS_TYPE_MEMARRAY, sizeof (struct smbios_table_type16),  0 },
+ 	SMBIOS_MAL_SYSMB,
+@@ -513,12 +566,18 @@
+ 	{ (struct smbios_structure *)&smbios_type1_template,
+ 	  smbios_type1_strings,
+ 	  smbios_type1_initializer },
++	{ (struct smbios_structure *)&smbios_type2_template,
++	  smbios_type2_strings,
++	  smbios_generic_initializer },
+ 	{ (struct smbios_structure *)&smbios_type3_template,
+ 	  smbios_type3_strings,
+ 	  smbios_generic_initializer },
+ 	{ (struct smbios_structure *)&smbios_type4_template,
+ 	  smbios_type4_strings,
+ 	  smbios_type4_initializer },
++	{ (struct smbios_structure *)&smbios_type11_template,
++	  NULL,
++	  smbios_type11_initializer },
+ 	{ (struct smbios_structure *)&smbios_type16_template,
+ 	  NULL,
+ 	  smbios_type16_initializer },
+@@ -667,6 +726,29 @@
+ 		else
+ 			type4->threads = (cores * threads);
+ 		curaddr = *endaddr;
++	}
++
++	return (0);
++}
++
++static int
++smbios_type11_initializer(struct smbios_structure *template_entry,
++    const char **template_strings, char *curaddr, char **endaddr,
++    uint16_t *n, uint16_t *size)
++{
++	struct smbios_table_type11 *type11;
++	int i = 0;
++
++	smbios_generic_initializer(template_entry, (const char **)smbios_type11_strings,
++	    curaddr, endaddr, n, size);
++
++	if (smbios_type11_strings != NULL) {
++		/* count up strings */
++		type11 = (struct smbios_table_type11 *)curaddr;
++		while (smbios_type11_strings[i]) {
++	  		i++;
++		}
++		type11->nstrings = i;
+ 	}
+ 
+ 	return (0);
+--- usr.sbin/bhyve/smbios.conf.8.orig	2020-04-16 09:03:24.442412000 -0400
++++ usr.sbin/bhyve/smbios.conf.8	2020-04-16 09:04:48.216120000 -0400
+@@ -0,0 +1,118 @@
++.\" Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
++.\" All rights reserved.
++.\"
++.\" Redistribution and use in source and binary forms, with or without
++.\" modification, are permitted provided that the following conditions
++.\" are met:
++.\" 1. Redistributions of source code must retain the above copyright
++.\"    notice, this list of conditions and the following disclaimer.
++.\" 2. Redistributions in binary form must reproduce the above copyright
++.\"    notice, this list of conditions and the following disclaimer in the
++.\"    documentation and/or other materials provided with the distribution.
++.\"
++.\" THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
++.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
++.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++.\" SUCH DAMAGE.
++.\"
++.\" $FreeBSD: releng/12.1/usr.sbin/bhyve/bhyve.8 349603 2019-07-02 16:54:46Z wblock $
++.\"
++.Dd April 13, 2020
++.Dt SMBIOS.CONF 8
++.Os
++.Sh NAME
++.Nm smbios.conf
++.Nd "configuration file containing overrides for smbios data for types 0, 1, 2, 3, or 11"
++.Sh DESCRIPTION
++The file
++.Nm
++is used to define keys and values, or strings, for the various types of smbios
++data. This date will then be accessible via the
++.Cd dmidecode
++command on the bhyve guest
++.Sh TYPE 0, 1, 2, 3 KEYS
++The following keys are updatable via
++.Nm
++.Bl -tag -width indent-two
++.It Type 0 keys:
++.Pp
++.Bl -tag -width ".Li simple" -compact
++.It Li vendor
++.It Li version
++.It Li biosdate
++.El
++.It Type 1 keys:
++.Pp
++.Bl -tag -width ".Li simple" -compact
++.It Li manufacturer
++.It Li product
++.It Li version
++.It Li serial
++.It Li sku
++.It Li family
++.El
++.It Type 2 keys:
++.Pp
++.Bl -tag -width ".Li simple" -compact
++.It Li manufacturer
++.It Li product
++.It Li version
++.It Li serial
++.It Li asset
++.El
++.It Type 3 keys:
++.Pp
++.Bl -tag -width ".Li simple" -compact
++.It Li manufacturer
++.It Li version
++.It Li serial
++.It Li asset
++.It Li sku
++.El
++.El
++.Sh NOTE
++.Bl -tag -width ".Li simple"
++.It For best results, quote any value with spaces in it
++.El
++.Sh EXAMPLES
++This example changes the manufacture for types 1, 2, and 3:
++.Bd -literal -offset indent
++type1 : { # system
++  manufacturer = "SomeCorp - type 1"
++}
++type2 : { # baseboard
++  manufacturer = "SomeCorp - type 2"
++}
++type3 : { # chassis
++  manufacturer = "SomeCorp - type 3"
++}
++.Ed
++
++This example defines several strings for type 11:
++.Bd -literal -offset indent
++type11 :  { # OEM strings
++ strings = [
++    "chassis_manufacturer: SomeCorp - type 11",
++    "chassis_model: XM100PY",
++ ];
++}
++.Ed
++.Sh SEE ALSO
++.Xr bhyve 8 ,
++.Pp
++.Rs
++.%B System Management BIOS (SMBIOS) Reference Specification
++.Re
++.Sh HISTORY
++.Nm
++first appeared in
++.Fx 12.1 .
++.Sh AUTHORS
++.An Allan Jude Aq Mt allanjude@FreeBSD.org
+--- share/examples/bhyve/vmrun.sh.orig	2020-04-10 15:23:09.096444000 -0400
++++ share/examples/bhyve/vmrun.sh	2020-04-16 09:03:24.454972000 -0400
+@@ -54,7 +54,7 @@
+ usage() {
+ 	local msg=$1
+ 
+-	echo "Usage: vmrun.sh [-aAEhiTv] [-c <CPUs>] [-C <console>]" \
++	echo "Usage: vmrun.sh [-aAEhiTv] [-B <smbios-config>] [-c <CPUs>] [-C <console>]" \
+ 	    "[-d <disk file>]"
+ 	echo "                [-e <name=value>] [-f <path of firmware>]" \
+ 	    "[-F <size>]"
+@@ -68,6 +68,7 @@
+ 	echo "       -h: display this help message"
+ 	echo "       -a: force memory mapped local APIC access"
+ 	echo "       -A: use AHCI disk emulation instead of ${DEFAULT_DISK}"
++	echo "       -B: smbios config file"
+ 	echo "       -c: number of virtual cpus (default: ${DEFAULT_CPUS})"
+ 	echo "       -C: console device (default: ${DEFAULT_CONSOLE})"
+ 	echo "       -d: virtio diskdev file (default: ${DEFAULT_VIRTIO_DISK})"
+@@ -134,7 +135,7 @@
+ vncsize=${DEFAULT_VNCSIZE}
+ tablet=""
+ 
+-while getopts aAc:C:d:e:Ef:F:g:hH:iI:l:L:m:n:p:P:t:Tuvw c ; do
++while getopts aAB:c:C:d:e:Ef:F:g:hH:iI:l:L:m:n:p:P:t:Tuvw c ; do
+ 	case $c in
+ 	a)
+ 		bhyverun_opt="${bhyverun_opt} -a"
+@@ -142,6 +143,9 @@
+ 	A)
+ 		disk_emulation="ahci-hd"
+ 		;;
++	B)
++		CONFIG="-B ${OPTARG}"
++		;;
+ 	c)
+ 		cpus=${OPTARG}
+ 		;;
+@@ -366,7 +370,7 @@
+ 		efiargs="${efiargs} ${tablet}"
+ 	fi
+ 
+-	${FBSDRUN} -c ${cpus} -m ${memsize} ${bhyverun_opt}		\
++	${FBSDRUN} ${CONFIG} -c ${cpus} -m ${memsize} ${bhyverun_opt}	\
+ 		-g ${gdbport}						\
+ 		-s 0:0,hostbridge					\
+ 		-s 1:0,lpc						\

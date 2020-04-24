@@ -1,0 +1,31 @@
+#!/bin/sh
+
+FILES="\
+usr.sbin/bhyve/Makefile \
+usr.sbin/bhyve/bhyve.8 \
+usr.sbin/bhyve/bhyverun.c \
+usr.sbin/bhyve/config.h \
+usr.sbin/bhyve/config.c \
+usr.sbin/bhyve/smbiostbl.c \
+usr.sbin/bhyve/smbios.conf.8 \
+share/examples/bhyve/vmrun.sh \
+"
+
+cd /usr/src
+rm -f ${PATCH}
+for file in ${FILES}; do
+  orig=$file.orig
+  # if no orig, skip
+  if [ ! -f $orig ]; then
+    echo "$orig: No such file or directory, nothing to do"
+    continue
+  # if empty orig, remove both
+  elif [ ! -s $orig ]; then
+    echo Removing $file completely
+    rm -f $orig $file
+  # else rename orig to file
+  else
+    echo Restoring $file
+    mv $orig $file
+  fi
+done

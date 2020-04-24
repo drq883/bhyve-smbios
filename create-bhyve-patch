@@ -1,0 +1,23 @@
+#!/bin/sh
+
+FILES="\
+usr.sbin/bhyve/Makefile \
+usr.sbin/bhyve/bhyve.8 \
+usr.sbin/bhyve/bhyverun.c \
+usr.sbin/bhyve/config.h \
+usr.sbin/bhyve/config.c \
+usr.sbin/bhyve/smbiostbl.c \
+usr.sbin/bhyve/smbios.conf.8 \
+share/examples/bhyve/vmrun.sh \
+"
+
+CURDIR=`pwd`
+PATCH=${CURDIR}/bhyve.patch-TEST
+
+cd /usr/src
+rm -f ${PATCH}
+for file in ${FILES}; do
+  orig=$file.orig
+  /usr/bin/diff -u $orig $file >> ${PATCH}
+done
+echo Created ${PATCH}
