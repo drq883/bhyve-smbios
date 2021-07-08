@@ -1,6 +1,6 @@
---- usr.sbin/bhyve/Makefile.orig	2020-04-10 15:20:38.047504000 -0400
-+++ usr.sbin/bhyve/Makefile	2020-04-16 09:03:24.409533000 -0400
-@@ -9,7 +9,7 @@
+--- usr.sbin/bhyve/Makefile.orig	2021-04-08 20:24:13.000000000 -0400
++++ usr.sbin/bhyve/Makefile	2021-07-08 15:17:52.294316000 -0400
+@@ -10,7 +10,7 @@
  PROG=	bhyve
  PACKAGE=	bhyve
  
@@ -9,56 +9,58 @@
  
  BHYVE_SYSDIR?=${SRCTOP}
  
-@@ -20,6 +20,7 @@
+@@ -22,6 +22,7 @@
  	bhyverun.c		\
  	block_if.c		\
  	bootrom.c		\
-+	config.c		\
++	config.c                \
  	console.c		\
- 	consport.c		\
  	ctl_util.c		\
-@@ -71,7 +72,7 @@
+ 	ctl_scsi_all.c		\
+@@ -83,7 +84,7 @@
  .PATH:  ${BHYVE_SYSDIR}/sys/amd64/vmm
  SRCS+=	vmm_instruction_emul.c
  
--LIBADD=	vmmapi md pthread z util sbuf cam
-+LIBADD=	vmmapi md pthread z util sbuf cam ucl
+-LIBADD=	vmmapi md pthread z util sbuf cam 9p
++LIBADD=	vmmapi md pthread z util sbuf cam 9p ucl
  
- .if ${MK_INET_SUPPORT} != "no"
- CFLAGS+=-DINET
-@@ -88,6 +89,7 @@
+ .if ${MK_CASPER} != "no"
+ LIBADD+=	casper
+@@ -116,8 +117,8 @@
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
-+CFLAGS+= -I${SRCTOP}/contrib/libucl/include
+-.if ${MK_BHYVE_SNAPSHOT} != "no"
+ CFLAGS+= -I${SRCTOP}/contrib/libucl/include
++.if ${MK_BHYVE_SNAPSHOT} != "no"
  
- .ifdef GDB_LOG
- CFLAGS+=-DGDB_LOG
---- usr.sbin/bhyve/bhyve.8.orig	2020-04-10 15:20:38.175999000 -0400
-+++ usr.sbin/bhyve/bhyve.8	2020-04-16 09:07:17.823058000 -0400
+ # Temporary disable capsicum, until we integrate checkpoint code with it.
+ CFLAGS+= -DWITHOUT_CAPSICUM
+--- usr.sbin/bhyve/bhyve.8.orig	2021-04-08 20:24:13.000000000 -0400
++++ usr.sbin/bhyve/bhyve.8	2021-07-08 15:29:20.687370000 -0400
 @@ -33,6 +33,8 @@
  .Sh SYNOPSIS
  .Nm
- .Op Fl abehuwxACHPSWY
+ .Op Fl AaCDeHhPSuWwxY
 +.br
 +.Op Fl B Ar CONFIG
  .Oo
- .Fl c\~ Ns
- .Oo
-@@ -87,6 +89,12 @@
- kernels compiled with
- .Cd "device bvmconsole" .
- This option will be deprecated in a future version.
+ .Sm off
+ .Fl c\~
+@@ -98,6 +100,12 @@
+ Required for
+ .Fx Ns /amd64
+ guests.
 +.It Fl B
 +Load a
 +.Cd "libucl"
 +configuration file, CONFIG, used to modify the attributes in
-+smbios tables type 0, 1, 2, 3 and 11 for this execution.
-+See smbios.conf(8) for syntax of this file.
++smbios tables type 0, 1, 2, 3, and 11 for this execution.
++See smbios.conf(8) for the syntax of this file.
  .It Fl c Op Ar setting ...
  Number of guest virtual CPUs
  and/or the CPU topology.
-@@ -623,6 +631,7 @@
+@@ -720,6 +728,7 @@
  .Xr ethers 5 ,
  .Xr bhyvectl 8 ,
  .Xr bhyveload 8
@@ -66,52 +68,55 @@
  .Pp
  .Rs
  .%A Intel
---- usr.sbin/bhyve/bhyverun.c.orig	2020-04-10 15:20:38.039671000 -0400
-+++ usr.sbin/bhyve/bhyverun.c	2020-04-16 09:03:24.432698000 -0400
-@@ -69,6 +69,7 @@
+--- usr.sbin/bhyve/bhyverun.c.orig	2021-04-08 20:24:13.000000000 -0400
++++ usr.sbin/bhyve/bhyverun.c	2021-07-08 15:37:33.298898000 -0400
+@@ -86,6 +86,7 @@
  #include "bhyverun.h"
  #include "acpi.h"
  #include "atkbdc.h"
 +#include "config.h"
+ #include "bootrom.h"
  #include "inout.h"
- #include "dbgport.h"
- #include "fwctl.h"
-@@ -211,12 +212,13 @@
+ #include "debug.h"
+@@ -236,12 +237,13 @@
  {
  
          fprintf(stderr,
--		"Usage: %s [-abehuwxACHPSWY]\n"
-+		"Usage: %s [-abehuwxABCHPSWY]\n"
+-		"Usage: %s [-aehuwxACDHPSWY]\n"
++		"Usage: %s [-aehuwxABCDHPSWY]\n"
  		"       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
- 		"       %*s [-g <gdb port>] [-l <lpc>]\n"
+ 		"       %*s [-l <lpc>]\n"
  		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] <vm>\n"
  		"       -a: local apic is in xAPIC mode (deprecated)\n"
  		"       -A: create ACPI tables\n"
 +		"       -B: load libucl smbios configuration file\n"
  		"       -c: number of cpus and/or topology specification\n"
  		"       -C: include guest memory in core file\n"
- 		"       -e: exit on unhandled I/O access\n"
-@@ -999,7 +1001,7 @@
- 	rtc_localtime = 1;
+ 		"       -D: destroy on power-off\n"
+@@ -1107,9 +1109,9 @@
  	memflags = 0;
  
--	optstr = "abehuwxACHIPSWYp:g:G:c:s:m:l:U:";
-+	optstr = "abehuwxACHIPSWYp:B:g:G:c:s:m:l:U:";
+ #ifdef BHYVE_SNAPSHOT
+-	optstr = "aehuwxACDHIPSWYp:G:c:s:m:l:U:r:";
++	optstr = "aehuwxACDHIPSWYp:B:G:c:s:m:l:U:r:";
+ #else
+-	optstr = "aehuwxACDHIPSWYp:G:c:s:m:l:U:";
++	optstr = "aehuwxACDHIPSWYp:B:G:c:s:m:l:U:";
+ #endif
  	while ((c = getopt(argc, argv, optstr)) != -1) {
  		switch (c) {
- 		case 'a':
-@@ -1010,6 +1012,9 @@
+@@ -1118,6 +1120,9 @@
  			break;
- 		case 'b':
- 			bvmcons = 1;
+ 		case 'A':
+ 			acpi = 1;
 +			break;
 +		case 'B':
 +			load_smbios_config(optarg);
  			break;
- 		case 'p':
-                         if (pincpu_parse(optarg) != 0) {
---- usr.sbin/bhyve/config.h.orig	2020-04-16 09:03:24.432829000 -0400
-+++ usr.sbin/bhyve/config.h	2020-04-16 09:03:24.433166000 -0400
+ 		case 'D':
+ 			destroy_on_poweroff = 1;
+--- usr.sbin/bhyve/config.h.orig	2021-07-08 16:05:27.738046000 -0400
++++ usr.sbin/bhyve/config.h	2021-07-08 15:38:48.412164000 -0400
 @@ -0,0 +1,39 @@
 +/*-
 + * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
@@ -126,7 +131,7 @@
 + * 2. Redistributions in binary form must reproduce the above copyright
 + *    notice, this list of conditions and the following disclaimer in the
 + *    documentation and/or other materials provided with the distribution.
-+ * 
++ *
 + * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
 + * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 + * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -152,8 +157,8 @@
 +int check_config_file(const char *smbios_file);
 +void load_smbios_config(const char *smbios_file);
 +int parse_smbios_config(struct ucl_parser *p);
---- usr.sbin/bhyve/config.c.orig	2020-04-16 09:03:24.433272000 -0400
-+++ usr.sbin/bhyve/config.c	2020-04-16 09:03:24.434563000 -0400
+--- usr.sbin/bhyve/config.c.orig	2021-07-08 16:05:32.082157000 -0400
++++ usr.sbin/bhyve/config.c	2021-07-08 15:40:23.668983000 -0400
 @@ -0,0 +1,285 @@
 +/*-
 + * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
@@ -440,20 +445,20 @@
 +
 +	return (0);
 +}
---- usr.sbin/bhyve/smbiostbl.c.orig	2020-04-10 15:20:38.173641000 -0400
-+++ usr.sbin/bhyve/smbiostbl.c	2020-04-16 09:03:24.442289000 -0400
-@@ -56,8 +56,10 @@
+--- usr.sbin/bhyve/smbiostbl.c.orig	2021-04-08 20:24:13.000000000 -0400
++++ usr.sbin/bhyve/smbiostbl.c	2021-07-08 15:58:55.511080000 -0400
+@@ -60,8 +60,10 @@
  
  #define	SMBIOS_TYPE_BIOS	0
  #define	SMBIOS_TYPE_SYSTEM	1
-+#define	SMBIOS_TYPE_BOARD	2
++#define	SMBIOS_TYPE_BOARD 	2
  #define	SMBIOS_TYPE_CHASSIS	3
  #define	SMBIOS_TYPE_PROCESSOR	4
 +#define	SMBIOS_TYPE_OEM		11
  #define	SMBIOS_TYPE_MEMARRAY	16
  #define	SMBIOS_TYPE_MEMDEVICE	17
  #define	SMBIOS_TYPE_MEMARRAYMAP	19
-@@ -153,6 +155,19 @@
+@@ -157,6 +159,19 @@
  } __packed;
  
  /*
@@ -465,15 +470,15 @@
 +	uint8_t			product;	/* product name string */
 +	uint8_t			version;	/* version string */
 +	uint8_t			serial;		/* serial number string */
-+	uint8_t			asset; 		/* asset tag */
-+	uint8_t			flags; 		/* feature flags */
++	uint8_t			asset;		/* asset tag */
++	uint8_t			flags;		/* feature flags */
 +} __packed;
 +
 +/*
   * System Enclosure or Chassis
   */
  #define	SMBIOS_CHT_UNKNOWN	0x02	/* unknown */
-@@ -172,6 +187,7 @@
+@@ -176,6 +191,7 @@
  	uint8_t			psstate;	/* power supply state */
  	uint8_t			tstate;		/* thermal state */
  	uint8_t			security;	/* security status */
@@ -481,7 +486,7 @@
  	uint8_t			uheight;	/* height in 'u's */
  	uint8_t			cords;		/* number of power cords */
  	uint8_t			elems;		/* number of element records */
-@@ -220,6 +236,12 @@
+@@ -224,6 +240,12 @@
  	uint16_t		family2;	/* processor family 2 */
  } __packed;
  
@@ -494,7 +499,7 @@
  /*
   * Physical Memory Array
   */
-@@ -355,6 +377,25 @@
+@@ -359,6 +381,25 @@
  	NULL
  };
  
@@ -505,7 +510,7 @@
 +	3,		/* version string */
 +	4,		/* serial number string */
 +	5,		/* asset tag */
-+	0 		/* feature flags */
++	0		/* feature flags */
 +};
 +
 +const char *smbios_type2_strings[] = {
@@ -520,7 +525,7 @@
  struct smbios_table_type3 smbios_type3_template = {
  	{ SMBIOS_TYPE_CHASSIS, sizeof (struct smbios_table_type3), 0 },
  	1,		/* manufacturer string */
-@@ -370,6 +411,7 @@
+@@ -374,6 +415,7 @@
  	0,		/* number of power cords (0=number unspecified) */
  	0,		/* number of contained element records */
  	0,		/* length of records */
@@ -528,7 +533,7 @@
  	5		/* sku number string */
  };
  
-@@ -423,6 +465,17 @@
+@@ -427,6 +469,17 @@
      const char **template_strings, char *curaddr, char **endaddr,
      uint16_t *n, uint16_t *size);
  
@@ -536,7 +541,7 @@
 +
 +struct smbios_table_type11 smbios_type11_template = {
 +	{ SMBIOS_TYPE_OEM, sizeof (struct smbios_table_type11),  0 },
-+	0               /* first string */
++	0		/* first string */
 +};
 +
 +static int smbios_type11_initializer(struct smbios_structure *template_entry,
@@ -546,7 +551,7 @@
  struct smbios_table_type16 smbios_type16_template = {
  	{ SMBIOS_TYPE_MEMARRAY, sizeof (struct smbios_table_type16),  0 },
  	SMBIOS_MAL_SYSMB,
-@@ -513,12 +566,18 @@
+@@ -517,12 +570,18 @@
  	{ (struct smbios_structure *)&smbios_type1_template,
  	  smbios_type1_strings,
  	  smbios_type1_initializer },
@@ -565,7 +570,7 @@
  	{ (struct smbios_structure *)&smbios_type16_template,
  	  NULL,
  	  smbios_type16_initializer },
-@@ -667,6 +726,29 @@
+@@ -671,6 +730,29 @@
  		else
  			type4->threads = (cores * threads);
  		curaddr = *endaddr;
@@ -589,14 +594,14 @@
 +		/* count up strings */
 +		type11 = (struct smbios_table_type11 *)curaddr;
 +		while (smbios_type11_strings[i]) {
-+	  		i++;
++			i++;
 +		}
 +		type11->nstrings = i;
  	}
  
  	return (0);
---- usr.sbin/bhyve/smbios.conf.8.orig	2020-04-16 09:03:24.442412000 -0400
-+++ usr.sbin/bhyve/smbios.conf.8	2020-04-16 09:04:48.216120000 -0400
+--- usr.sbin/bhyve/smbios.conf.8.orig	2021-07-08 16:05:41.057318000 -0400
++++ usr.sbin/bhyve/smbios.conf.8	2021-07-08 16:00:24.447679000 -0400
 @@ -0,0 +1,118 @@
 +.\" Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
 +.\" All rights reserved.
@@ -716,8 +721,8 @@
 +.Fx 12.1 .
 +.Sh AUTHORS
 +.An Allan Jude Aq Mt allanjude@FreeBSD.org
---- share/examples/bhyve/vmrun.sh.orig	2020-04-10 15:23:09.096444000 -0400
-+++ share/examples/bhyve/vmrun.sh	2020-04-16 09:03:24.454972000 -0400
+--- share/examples/bhyve/vmrun.sh.orig	2021-04-08 20:24:07.000000000 -0400
++++ share/examples/bhyve/vmrun.sh	2021-07-08 16:05:05.177306000 -0400
 @@ -54,7 +54,7 @@
  usage() {
  	local msg=$1
@@ -735,7 +740,7 @@
  	echo "       -c: number of virtual cpus (default: ${DEFAULT_CPUS})"
  	echo "       -C: console device (default: ${DEFAULT_CONSOLE})"
  	echo "       -d: virtio diskdev file (default: ${DEFAULT_VIRTIO_DISK})"
-@@ -134,7 +135,7 @@
+@@ -132,7 +133,7 @@
  vncsize=${DEFAULT_VNCSIZE}
  tablet=""
  
@@ -744,7 +749,7 @@
  	case $c in
  	a)
  		bhyverun_opt="${bhyverun_opt} -a"
-@@ -142,6 +143,9 @@
+@@ -140,6 +141,9 @@
  	A)
  		disk_emulation="ahci-hd"
  		;;
@@ -754,12 +759,12 @@
  	c)
  		cpus=${OPTARG}
  		;;
-@@ -366,7 +370,7 @@
+@@ -361,7 +365,7 @@
  		efiargs="${efiargs} ${tablet}"
  	fi
  
 -	${FBSDRUN} -c ${cpus} -m ${memsize} ${bhyverun_opt}		\
 +	${FBSDRUN} ${CONFIG} -c ${cpus} -m ${memsize} ${bhyverun_opt}	\
- 		-g ${gdbport}						\
  		-s 0:0,hostbridge					\
  		-s 1:0,lpc						\
+ 		${efiargs}						\
