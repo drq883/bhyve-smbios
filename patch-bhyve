@@ -10,7 +10,9 @@ fi
 PATCH=${CURDIR}/${FILE}
 
 cd /usr/src
-patch <${PATCH} && cd /usr/src/usr.sbin/bhyve && make && make install
-# from commands executed as part of /usr/src/share/examples for bhybe
-install -v -d -m 0755 -o root -g wheel /usr/share/examples/bhyve
-install -v -o root -g wheel -m 444 /usr/src/share/examples/bhyve/vmrun.sh /usr/share/examples/bhyve/vmrun.sh
+patch <${PATCH} \
+  && cd /usr/src/usr.sbin/bhyve \
+  && make \
+  && make install \
+  && install -v -d -m 0755 -o root -g wheel /usr/share/examples/bhyve \
+  && install -v -o root -g wheel -m 444 /usr/src/share/examples/bhyve/vmrun.sh /usr/share/examples/bhyve/vmrun.sh
