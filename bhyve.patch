@@ -447,38 +447,15 @@
 +}
 --- usr.sbin/bhyve/smbiostbl.c.orig	2021-04-08 20:24:13.000000000 -0400
 +++ usr.sbin/bhyve/smbiostbl.c	2021-07-08 15:58:55.511080000 -0400
-@@ -60,8 +60,10 @@
- 
- #define	SMBIOS_TYPE_BIOS	0
- #define	SMBIOS_TYPE_SYSTEM	1
-+#define	SMBIOS_TYPE_BOARD 	2
+@@ -63,6 +63,7 @@
+ #define	SMBIOS_TYPE_BOARD	2
  #define	SMBIOS_TYPE_CHASSIS	3
  #define	SMBIOS_TYPE_PROCESSOR	4
 +#define	SMBIOS_TYPE_OEM		11
  #define	SMBIOS_TYPE_MEMARRAY	16
  #define	SMBIOS_TYPE_MEMDEVICE	17
  #define	SMBIOS_TYPE_MEMARRAYMAP	19
-@@ -157,6 +159,19 @@
- } __packed;
- 
- /*
-+ * Baseboard Information
-+ */
-+struct smbios_table_type2 {
-+	struct smbios_structure	header;
-+	uint8_t			manufacturer;	/* manufacturer string */
-+	uint8_t			product;	/* product name string */
-+	uint8_t			version;	/* version string */
-+	uint8_t			serial;		/* serial number string */
-+	uint8_t			asset;		/* asset tag */
-+	uint8_t			flags;		/* feature flags */
-+} __packed;
-+
-+/*
-  * System Enclosure or Chassis
-  */
- #define	SMBIOS_CHT_UNKNOWN	0x02	/* unknown */
-@@ -176,6 +191,7 @@
+@@ -198,6 +199,7 @@
  	uint8_t			psstate;	/* power supply state */
  	uint8_t			tstate;		/* thermal state */
  	uint8_t			security;	/* security status */
@@ -486,7 +463,7 @@
  	uint8_t			uheight;	/* height in 'u's */
  	uint8_t			cords;		/* number of power cords */
  	uint8_t			elems;		/* number of element records */
-@@ -224,6 +240,12 @@
+@@ -246,6 +248,12 @@
  	uint16_t		family2;	/* processor family 2 */
  } __packed;
  
@@ -499,33 +476,7 @@
  /*
   * Physical Memory Array
   */
-@@ -359,6 +381,25 @@
- 	NULL
- };
- 
-+struct smbios_table_type2 smbios_type2_template = {
-+	{ SMBIOS_TYPE_BOARD, sizeof (struct smbios_table_type2), 0 },
-+	1,		/* manufacturer string */
-+	2,		/* product string */
-+	3,		/* version string */
-+	4,		/* serial number string */
-+	5,		/* asset tag */
-+	0		/* feature flags */
-+};
-+
-+const char *smbios_type2_strings[] = {
-+	" ",		/* manufacturer string */
-+	"BHYVE",	/* product name string */
-+	"1.0",		/* version string */
-+	"None",		/* serial number string */
-+	"None",		/* asset tag string */
-+	NULL
-+};
-+
- struct smbios_table_type3 smbios_type3_template = {
- 	{ SMBIOS_TYPE_CHASSIS, sizeof (struct smbios_table_type3), 0 },
- 	1,		/* manufacturer string */
-@@ -374,6 +415,7 @@
+@@ -420,6 +428,7 @@
  	0,		/* number of power cords (0=number unspecified) */
  	0,		/* number of contained element records */
  	0,		/* length of records */
@@ -533,7 +484,7 @@
  	5		/* sku number string */
  };
  
-@@ -427,6 +469,17 @@
+@@ -473,6 +482,18 @@
      const char **template_strings, char *curaddr, char **endaddr,
      uint16_t *n, uint16_t *size);
  
@@ -548,19 +499,11 @@
 +    const char **template_strings, char *curaddr, char **endaddr,
 +    uint16_t *n, uint16_t *size);
 +
++
  struct smbios_table_type16 smbios_type16_template = {
  	{ SMBIOS_TYPE_MEMARRAY, sizeof (struct smbios_table_type16),  0 },
  	SMBIOS_MAL_SYSMB,
-@@ -517,12 +570,18 @@
- 	{ (struct smbios_structure *)&smbios_type1_template,
- 	  smbios_type1_strings,
- 	  smbios_type1_initializer },
-+	{ (struct smbios_structure *)&smbios_type2_template,
-+	  smbios_type2_strings,
-+	  smbios_generic_initializer },
- 	{ (struct smbios_structure *)&smbios_type3_template,
- 	  smbios_type3_strings,
- 	  smbios_generic_initializer },
+@@ -572,6 +593,9 @@
  	{ (struct smbios_structure *)&smbios_type4_template,
  	  smbios_type4_strings,
  	  smbios_type4_initializer },
@@ -570,16 +513,10 @@
  	{ (struct smbios_structure *)&smbios_type16_template,
  	  NULL,
  	  smbios_type16_initializer },
-@@ -671,6 +730,29 @@
- 		else
- 			type4->threads = (cores * threads);
- 		curaddr = *endaddr;
-+	}
-+
-+	return (0);
-+}
-+
-+static int
+@@ -726,6 +750,29 @@
+ }
+ 
+ static int
 +smbios_type11_initializer(struct smbios_structure *template_entry,
 +    const char **template_strings, char *curaddr, char **endaddr,
 +    uint16_t *n, uint16_t *size)
@@ -597,9 +534,16 @@
 +			i++;
 +		}
 +		type11->nstrings = i;
- 	}
- 
- 	return (0);
++ 	}
++ 
++ 	return (0);
++}
++
++static int
+ smbios_type16_initializer(struct smbios_structure *template_entry,
+     const char **template_strings, char *curaddr, char **endaddr,
+     uint16_t *n, uint16_t *size)
+
 --- usr.sbin/bhyve/smbios.conf.8.orig	2021-07-08 16:05:41.057318000 -0400
 +++ usr.sbin/bhyve/smbios.conf.8	2021-07-08 16:00:24.447679000 -0400
 @@ -0,0 +1,118 @@
