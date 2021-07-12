@@ -418,7 +418,7 @@
 +					break;
 +				case 2:
 +					parse_smbios_keys(cur,
-+					  "manufacturer:product:version:serial:asset",
++					  "manufacturer:product:version:serial:asset:location",
 +					  (char **)smbios_type2_strings);
 +					break;
 +				case 3:
