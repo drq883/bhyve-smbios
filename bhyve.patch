@@ -546,7 +546,7 @@
 
 --- usr.sbin/bhyve/smbios.conf.8.orig	2021-07-08 16:05:41.057318000 -0400
 +++ usr.sbin/bhyve/smbios.conf.8	2021-07-08 16:00:24.447679000 -0400
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,119 @@
 +.\" Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
 +.\" All rights reserved.
 +.\"
@@ -615,6 +615,7 @@
 +.It Li version
 +.It Li serial
 +.It Li asset
++.It Li location
 +.El
 +.It Type 3 keys:
 +.Pp
