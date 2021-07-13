@@ -4,8 +4,8 @@ FILES="\
 usr.sbin/bhyve/Makefile \
 usr.sbin/bhyve/bhyve.8 \
 usr.sbin/bhyve/bhyverun.c \
-usr.sbin/bhyve/config.h \
-usr.sbin/bhyve/config.c \
+usr.sbin/bhyve/smbioscfg.h \
+usr.sbin/bhyve/smbioscfg.c \
 usr.sbin/bhyve/smbiostbl.c \
 usr.sbin/bhyve/smbios.conf.8 \
 share/examples/bhyve/vmrun.sh \

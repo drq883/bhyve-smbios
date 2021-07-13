@@ -13,7 +13,7 @@
  	bhyverun.c		\
  	block_if.c		\
  	bootrom.c		\
-+	config.c                \
++	smbioscfg.c                \
  	console.c		\
  	ctl_util.c		\
  	ctl_scsi_all.c		\
@@ -74,7 +74,7 @@
  #include "bhyverun.h"
  #include "acpi.h"
  #include "atkbdc.h"
-+#include "config.h"
++#include "smbioscfg.h"
  #include "bootrom.h"
  #include "inout.h"
  #include "debug.h"
@@ -115,8 +115,8 @@
  			break;
  		case 'D':
  			destroy_on_poweroff = 1;
---- usr.sbin/bhyve/config.h.orig	2021-07-08 16:05:27.738046000 -0400
-+++ usr.sbin/bhyve/config.h	2021-07-08 15:38:48.412164000 -0400
+--- usr.sbin/bhyve/smbioscfg.h.orig	2021-07-08 16:05:27.738046000 -0400
++++ usr.sbin/bhyve/smbioscfg.h	2021-07-08 15:38:48.412164000 -0400
 @@ -0,0 +1,39 @@
 +/*-
 + * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
@@ -157,8 +157,8 @@
 +int check_config_file(const char *smbios_file);
 +void load_smbios_config(const char *smbios_file);
 +int parse_smbios_config(struct ucl_parser *p);
---- usr.sbin/bhyve/config.c.orig	2021-07-08 16:05:32.082157000 -0400
-+++ usr.sbin/bhyve/config.c	2021-07-08 15:40:23.668983000 -0400
+--- usr.sbin/bhyve/smbioscfg.c.orig	2021-07-08 16:05:32.082157000 -0400
++++ usr.sbin/bhyve/smbioscfg.c	2021-07-08 15:40:23.668983000 -0400
 @@ -0,0 +1,285 @@
 +/*-
 + * Copyright (c) 2015 Allan Jude <allanjude@FreeBSD.org>
@@ -199,7 +199,7 @@
 +#include <string.h>
 +#include <stdio.h>
 +
-+#include "config.h"
++#include "smbioscfg.h"
 +
 +/*
 + * Check if the config file exists.
