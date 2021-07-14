@@ -4,22 +4,22 @@
  PROG=	bhyve
  PACKAGE=	bhyve
  
--MAN=	bhyve.8
-+MAN=	bhyve.8 smbios.conf.8
+-MAN=	bhyve.8 bhyve_config.5
++MAN=	bhyve.8 bhyve_config.5 smbios.conf.8
  
  BHYVE_SYSDIR?=${SRCTOP}
  
-@@ -62,6 +62,7 @@
+@@ -63,6 +63,7 @@
+ 	ps2mouse.c		\
  	rfb.c			\
  	rtc.c			\
 +	smbioscfg.c		\
  	smbiostbl.c		\
  	sockstream.c		\
  	task_switch.c		\
- 	uart_emul.c		\
-@@ -85,6 +86,9 @@
+@@ -87,6 +88,9 @@
  
- LIBADD=	vmmapi md pthread z util sbuf cam 9p
+ LIBADD=	vmmapi md nv pthread z util sbuf cam 9p
  
 +# for smbioscfg
 +LIBADD+=	ucl
@@ -27,7 +27,7 @@
  .if ${MK_CASPER} != "no"
  LIBADD+=	casper
  LIBADD+=	cap_pwd
-@@ -116,8 +120,8 @@
+@@ -118,8 +122,8 @@
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
@@ -48,20 +48,20 @@
  .Oo
  .Sm off
  .Fl c\~
-@@ -98,6 +100,12 @@
- Required for
- .Fx Ns /amd64
- guests.
+@@ -104,6 +106,12 @@
+ The guest's local APIC is configured in xAPIC mode.
+ The xAPIC mode is the default setting so this option is redundant.
+ It will be deprecated in a future version.
 +.It Fl B
 +Load a
 +.Cd "libucl"
 +configuration file, CONFIG, used to modify the attributes in
 +smbios tables type 0, 1, 2, 3, and 11 for this execution.
 +See smbios.conf(8) for the syntax of this file.
+ .It Fl C
+ Include guest memory in core file.
  .It Fl c Op Ar setting ...
- Number of guest virtual CPUs
- and/or the CPU topology.
-@@ -720,6 +728,7 @@
+@@ -910,6 +918,7 @@
  .Xr ethers 5 ,
  .Xr bhyvectl 8 ,
  .Xr bhyveload 8
@@ -71,51 +71,44 @@
  .%A Intel
 --- usr.sbin/bhyve/bhyverun.c.orig	2021-04-08 20:24:13.000000000 -0400
 +++ usr.sbin/bhyve/bhyverun.c	2021-07-08 15:37:33.298898000 -0400
-@@ -86,6 +86,7 @@
- #include "bhyverun.h"
- #include "acpi.h"
- #include "atkbdc.h"
+@@ -100,6 +100,7 @@
+ #include "pci_emul.h"
+ #include "pci_irq.h"
+ #include "pci_lpc.h"
 +#include "smbioscfg.h"
- #include "bootrom.h"
- #include "inout.h"
- #include "debug.h"
-@@ -236,12 +237,13 @@
- {
- 
-         fprintf(stderr,
--		"Usage: %s [-aehuwxACDHPSWY]\n"
-+		"Usage: %s [-aehuwxABCDHPSWY]\n"
- 		"       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
- 		"       %*s [-l <lpc>]\n"
- 		"       %*s [-m mem] [-p vcpu:hostcpu] [-s <pci>] [-U uuid] <vm>\n"
- 		"       -a: local apic is in xAPIC mode (deprecated)\n"
+ #include "smbiostbl.h"
+ #ifdef BHYVE_SNAPSHOT
+ #include "snapshot.h"
+@@ -228,6 +229,7 @@
+ 		"       %*s [-p vcpu:hostcpu] [-r file] [-s pci] [-U uuid] vmname\n"
  		"       -A: create ACPI tables\n"
+ 		"       -a: local apic is in xAPIC mode (deprecated)\n"
 +		"       -B: load libucl smbios configuration file\n"
- 		"       -c: number of cpus and/or topology specification\n"
  		"       -C: include guest memory in core file\n"
+ 		"       -c: number of CPUs and/or topology specification\n"
  		"       -D: destroy on power-off\n"
-@@ -1107,9 +1109,9 @@
- 	memflags = 0;
+@@ -1225,9 +1227,9 @@
+ 	progname = basename(argv[0]);
  
  #ifdef BHYVE_SNAPSHOT
--	optstr = "aehuwxACDHIPSWYp:G:c:s:m:l:U:r:";
-+	optstr = "aehuwxACDHIPSWYp:B:G:c:s:m:l:U:r:";
+-	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:U:r:";
++	optstr = "aehuwxACDHIPSWYk:o:p:B:G:c:s:m:l:U:r:";
  #else
--	optstr = "aehuwxACDHIPSWYp:G:c:s:m:l:U:";
-+	optstr = "aehuwxACDHIPSWYp:B:G:c:s:m:l:U:";
+-	optstr = "aehuwxACDHIPSWYk:o:p:G:c:s:m:l:U:";
++	optstr = "aehuwxACDHIPSWYk:o:p:B:G:c:s:m:l:U:";
  #endif
  	while ((c = getopt(argc, argv, optstr)) != -1) {
  		switch (c) {
-@@ -1118,6 +1120,9 @@
+@@ -1236,6 +1238,9 @@
  			break;
  		case 'A':
- 			acpi = 1;
+ 			set_config_bool("acpi_tables", true);
 +			break;
 +		case 'B':
 +			load_smbios_config(optarg);
  			break;
  		case 'D':
- 			destroy_on_poweroff = 1;
+ 			set_config_bool("destroy_on_poweroff", true);
 --- usr.sbin/bhyve/smbioscfg.h.orig	2021-07-08 16:05:27.738046000 -0400
 +++ usr.sbin/bhyve/smbioscfg.h	2021-07-08 15:38:48.412164000 -0400
 @@ -0,0 +1,39 @@
