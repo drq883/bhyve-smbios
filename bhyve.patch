@@ -9,24 +9,25 @@
  
  BHYVE_SYSDIR?=${SRCTOP}
  
-@@ -22,6 +22,7 @@
- 	bhyverun.c		\
- 	block_if.c		\
- 	bootrom.c		\
-+	smbioscfg.c                \
- 	console.c		\
- 	ctl_util.c		\
- 	ctl_scsi_all.c		\
-@@ -83,7 +84,7 @@
- .PATH:  ${BHYVE_SYSDIR}/sys/amd64/vmm
- SRCS+=	vmm_instruction_emul.c
+@@ -62,6 +62,7 @@
+ 	rfb.c			\
+ 	rtc.c			\
++	smbioscfg.c		\
+ 	smbiostbl.c		\
+ 	sockstream.c		\
+ 	task_switch.c		\
+ 	uart_emul.c		\
+@@ -85,6 +86,9 @@
  
--LIBADD=	vmmapi md pthread z util sbuf cam 9p
-+LIBADD=	vmmapi md pthread z util sbuf cam 9p ucl
+ LIBADD=	vmmapi md pthread z util sbuf cam 9p
  
++# for smbioscfg
++LIBADD+=	ucl
++
  .if ${MK_CASPER} != "no"
  LIBADD+=	casper
-@@ -116,8 +117,8 @@
+ LIBADD+=	cap_pwd
+@@ -116,8 +120,8 @@
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/e1000
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/mii
  CFLAGS+= -I${BHYVE_SYSDIR}/sys/dev/usb/controller
