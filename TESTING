@@ -1,0 +1,46 @@
+After cleanly applying patches and building and installing the binaries, 
+I used the following command when testing out these patches to bhyve
+
+Step 1 - Grab a FreeBSD iso, I chose 12.2
+
+   fetch ftp://ftp.freebsd.org/pub/FreeBSD/releases/ISO-IMAGES/12.2/FreeBSD-12.2-RELEASE-amd64-bootonly.iso
+
+Step 2 - Load required kernel module
+
+   kldload vmm
+
+Step 3 - Setup Network
+
+   NIC=vmx0                    # <- CHANGE IF NEEDED
+   ifconfig tap0 create
+   ifconfig bridge0 create
+   ifconfig bridge0 addm ${NIC} addm tap0
+   ifconfig bridge0 up
+
+   sysctl net.link.tap.up_on_open=1
+
+Step 4 - Create DISK image
+
+   truncate -s 16G guest.img
+
+Step 5 - Create /etc/smbios.conf to use
+
+   cp smbios.conf /etc
+
+Step 6 - Install FreeBSD 
+
+   sh /usr/share/examples/bhyve/vmrun.sh \
+     -B /etc/smbios.conf \
+     -c 1 \
+     -m 1024M \
+     -t tap0 \
+     -d guest.img \
+     -i \
+     -I FreeBSD-12.2-RELEASE-amd64-bootonly.iso \
+     guestname
+
+Step 7 - Verify data matches your smbios.conf
+
+I did a minimal install and at the end, from the shell, I installed dmidecode.
+
+Then I used "dmidecode -t 2" to see that the patches worked.
